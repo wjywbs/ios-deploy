@@ -798,8 +798,8 @@ void usage(const char* app) {
         "  -v, --verbose                enable verbose output\n"
         "  -m, --noinstall              directly start debugging without app install (-d not required) \n"
         "  -V, --version                print the executable version \n"
-        "  -p, --port                   port used for device (default: 12345) \n"
-        "  -s, --symbol                 symbol folder name for device (default: \"7.0.2\\ (11A501)\" ) \n",
+        "  -p, --port <number>          port used for device, default: 12345 \n"
+        "  -s, --symbol <name>          symbol folder name for device, default: \"7.0.2\\ (11A501)\" \n",
         app);
 }
 
