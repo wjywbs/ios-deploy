@@ -65,7 +65,7 @@ int AMDeviceSecureInstallApplication(int zero, AMDeviceRef device, CFURLRef url,
 int AMDeviceMountImage(AMDeviceRef device, CFStringRef image, CFDictionaryRef options, void *callback, int cbarg);
 mach_error_t AMDeviceLookupApplications(AMDeviceRef device, CFDictionaryRef options, CFDictionaryRef *result);
 
-bool found_device = false, debug = false, verbose = false, unbuffered = false, nostart = false, detect_only = false, install = true;
+bool found_device = false, debug = false, verbose = false, unbuffered = false, nostart = false, detect_only = false, install = true, uninstall = false;
 char *app_path = NULL;
 char *device_id = NULL;
 char *args = NULL;
@@ -673,7 +673,15 @@ void launch_debugger(AMDeviceRef device, CFURLRef url) {
     parent = getpid();
     int pid = fork();
     if (pid == 0) {
-        char *runOption = nostart ? "" : "print \\\'run\\\'\n";
+        /* 
+         * Execute run command twice. Sometimes the first run has
+         * "error: a process is already being debugged; Process 0 
+         * connected". A second run command can run the app.
+         * If the first run command started the app successfully, 
+         * the second run doesn't affect the debug.
+         */
+        char *runOption = nostart ? "" : "print \\\'run\\\'\nprint \\\'run\\\'\n";
+        
         char lldb_shell[400];
         sprintf(lldb_shell, LLDB_SHELL, runOption);
 
@@ -684,6 +692,42 @@ void launch_debugger(AMDeviceRef device, CFURLRef url) {
         _exit(0);
     }
 
+}
+
+CFStringRef get_bundle_id(CFURLRef app_url)
+{
+    if (app_url == NULL)
+        return NULL;
+
+    CFURLRef url = CFURLCreateCopyAppendingPathComponent(NULL, app_url, CFSTR("Info.plist"), false);
+
+    if (url == NULL)
+        return NULL;
+
+    CFReadStreamRef stream = CFReadStreamCreateWithFile(NULL, url);
+    CFRelease(url);
+
+    if (stream == NULL)
+        return NULL;
+
+    CFPropertyListRef plist = NULL;
+    if (CFReadStreamOpen(stream) == TRUE) {
+        plist = CFPropertyListCreateWithStream(NULL, stream, 0,
+                                               kCFPropertyListImmutable, NULL, NULL);
+    }
+    CFReadStreamClose(stream);
+    CFRelease(stream);
+
+    if (plist == NULL)
+        return NULL;
+
+    const void *value = CFDictionaryGetValue(plist, CFSTR("CFBundleIdentifier"));
+    CFStringRef bundle_id = NULL;
+    if (value != NULL)
+        bundle_id = CFRetain(value);
+
+    CFRelease(plist);
+    return bundle_id;
 }
 
 void handle_device(AMDeviceRef device) {
@@ -714,7 +758,29 @@ void handle_device(AMDeviceRef device) {
 
     CFRelease(relative_url);
 
+    if (uninstall) {
+        printf("------ Uninstall phase ------\n");
+
+        CFStringRef bundle_id = get_bundle_id(url);
+        if (bundle_id == NULL) {
+            printf("Error: Unable to get bundle id from package %s\n Uninstall failed\n", app_path);
+        } else {
+            AMDeviceConnect(device);
+            assert(AMDeviceIsPaired(device));
+            assert(AMDeviceValidatePairing(device) == 0);
+            assert(AMDeviceStartSession(device) == 0);
+
+            assert(AMDeviceSecureUninstallApplication(0, device, bundle_id, 0, NULL, 0) == 0);
+
+            assert(AMDeviceStopSession(device) == 0);
+            assert(AMDeviceDisconnect(device) == 0);
+
+            printf("[ OK ] Uninstalled package with bundle id %s\n", CFStringGetCStringPtr(bundle_id, CFStringGetSystemEncoding()));
+        }
+    }
+
     if(install) {
+        printf("------ Install phase ------\n");
         printf("[  0%%] Found device (%s), beginning install\n", CFStringGetCStringPtr(found_device_id, CFStringGetSystemEncoding()));
 
         AMDeviceConnect(device);
@@ -799,7 +865,8 @@ void usage(const char* app) {
         "  -m, --noinstall              directly start debugging without app install (-d not required) \n"
         "  -V, --version                print the executable version \n"
         "  -p, --port <number>          port used for device, default: 12345 \n"
-        "  -s, --symbol <name>          symbol folder name for device, default: \"7.0.2\\ (11A501)\" \n",
+        "  -s, --symbol <name>          symbol folder name for device, default: \"7.0.2\\ (11A501)\" \n"
+        "  -r, --uninstall              uninstall the app before install (do not use with -m; app cache and data are cleared) \n",
         app);
 }
 
@@ -823,11 +890,12 @@ int main(int argc, char *argv[]) {
         { "noinstall", no_argument, NULL, 'm' },
         { "port", required_argument, NULL, 'p' },
         { "symbol", required_argument, NULL, 's' },
+        { "uninstall", required_argument, NULL, 'r' },
         { NULL, 0, NULL, 0 },
     };
     char ch;
 
-    while ((ch = getopt_long(argc, argv, "Vmcdvuni:b:a:t:g:x:p:s:", longopts, NULL)) != -1)
+    while ((ch = getopt_long(argc, argv, "Vmcdvunri:b:a:t:g:x:p:s:", longopts, NULL)) != -1)
     {
         switch (ch) {
         case 'm':
@@ -870,6 +938,9 @@ int main(int argc, char *argv[]) {
         case 's':
             symbol = optarg;
             break;
+        case 'r':
+            uninstall = 1;
+            break;
         default:
             usage(argv[0]);
             return 1;
@@ -892,10 +963,6 @@ int main(int argc, char *argv[]) {
 
     if (symbol == NULL) {
         symbol = strdup("7.0.2\\ (11A501)");
-    }
-
-    if (!detect_only) {
-        printf("------ Install phase ------\n");
     }
 
     if (app_path) {
