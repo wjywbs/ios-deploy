@@ -890,7 +890,7 @@ int main(int argc, char *argv[]) {
         { "noinstall", no_argument, NULL, 'm' },
         { "port", required_argument, NULL, 'p' },
         { "symbol", required_argument, NULL, 's' },
-        { "uninstall", required_argument, NULL, 'r' },
+        { "uninstall", no_argument, NULL, 'r' },
         { NULL, 0, NULL, 0 },
     };
     char ch;
