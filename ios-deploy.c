@@ -16,7 +16,7 @@
 #include <netinet/tcp.h>
 #include "MobileDevice.h"
 
-#define APP_VERSION    "1.0.4"
+#define APP_VERSION    "1.0.5"
 #define PREP_CMDS_PATH "/tmp/fruitstrap-lldb-prep-cmds-"
 #define LLDB_SHELL "python -u -c $'import time\ntime.sleep(1.0)\n%swhile True: time.sleep(0.1); cmd = raw_input(); print (cmd)' | lldb -s " PREP_CMDS_PATH
 
@@ -27,7 +27,7 @@
  * log enable -v -f /Users/vargaz/gdb-remote.log gdb-remote all
  */
 #define LLDB_PREP_CMDS CFSTR("\
-    platform select remote-ios --sysroot {home}/Library/Developer/Xcode/iOS\\ DeviceSupport/{symbol_folder}/Symbols/\n\
+    platform select remote-ios --sysroot {symbols_path}\n\
     target create \"{disk_app}\"\n\
     script fruitstrap_device_app=\"{device_app}\"\n\
     script fruitstrap_connect_url=\"connect://127.0.0.1:{device_port}\"\n\
@@ -71,7 +71,6 @@ char *device_id = NULL;
 char *args = NULL;
 int timeout = 0;
 int port = 12345;
-char *symbol = NULL;
 CFStringRef last_path = NULL;
 service_conn_t gdbfd;
 pid_t parent = 0;
@@ -409,18 +408,15 @@ CFStringRef copy_disk_app_identifier(CFURLRef disk_app_url) {
 }
 
 void write_lldb_prep_cmds(AMDeviceRef device, CFURLRef disk_app_url) {
+    CFStringRef ds_path = copy_device_support_path(device);
+    CFStringRef symbols_path = CFStringCreateWithFormat(NULL, NULL, CFSTR("'%@/Symbols'"), ds_path);
+
     CFMutableStringRef cmds = CFStringCreateMutableCopy(NULL, 0, LLDB_PREP_CMDS);
     CFRange range = { 0, CFStringGetLength(cmds) };
 
-    CFStringRef user_home_path = CFStringCreateWithCString(NULL, getenv("HOME"), kCFStringEncodingASCII);
-    CFStringFindAndReplace(cmds, CFSTR("{home}"), user_home_path, range, 0);
+    CFStringFindAndReplace(cmds, CFSTR("{symbols_path}"), symbols_path, range, 0);
     range.length = CFStringGetLength(cmds);
 
-    CFStringRef symbol_folder = CFStringCreateWithCString(NULL, symbol, kCFStringEncodingASCII);
-    CFStringFindAndReplace(cmds, CFSTR("{symbol_folder}"), symbol_folder, range, 0);
-    range.length = CFStringGetLength(cmds);
-
-    CFStringRef ds_path = copy_device_support_path(device);
     CFStringFindAndReplace(cmds, CFSTR("{ds_path}"), ds_path, range, 0);
     range.length = CFStringGetLength(cmds);
 
@@ -502,7 +498,6 @@ void write_lldb_prep_cmds(AMDeviceRef device, CFURLRef disk_app_url) {
 
     CFRelease(cmds);
     if (ds_path != NULL) CFRelease(ds_path);
-    CFRelease(user_home_path);
     CFRelease(bundle_identifier);
     CFRelease(device_app_url);
     CFRelease(device_app_path);
@@ -797,9 +792,8 @@ void usage(const char* app) {
         "  -n, --nostart                do not start the app when debugging\n"
         "  -v, --verbose                enable verbose output\n"
         "  -m, --noinstall              directly start debugging without app install (-d not required) \n"
-        "  -V, --version                print the executable version \n"
         "  -p, --port <number>          port used for device, default: 12345 \n"
-        "  -s, --symbol <name>          symbol folder name for device, default: \"7.0.2\\ (11A501)\" \n",
+        "  -V, --version                print the executable version \n",
         app);
 }
 
@@ -822,12 +816,11 @@ int main(int argc, char *argv[]) {
         { "version", no_argument, NULL, 'V' },
         { "noinstall", no_argument, NULL, 'm' },
         { "port", required_argument, NULL, 'p' },
-        { "symbol", required_argument, NULL, 's' },
         { NULL, 0, NULL, 0 },
     };
     char ch;
 
-    while ((ch = getopt_long(argc, argv, "Vmcdvuni:b:a:t:g:x:p:s:", longopts, NULL)) != -1)
+    while ((ch = getopt_long(argc, argv, "Vmcdvuni:b:a:t:g:x:p:", longopts, NULL)) != -1)
     {
         switch (ch) {
         case 'm':
@@ -867,9 +860,6 @@ int main(int argc, char *argv[]) {
         case 'p':
             port = atoi(optarg);
             break;
-        case 's':
-            symbol = optarg;
-            break;
         default:
             usage(argv[0]);
             return 1;
@@ -888,10 +878,6 @@ int main(int argc, char *argv[]) {
 
     if (detect_only && timeout == 0) {
         timeout = 5;
-    }
-
-    if (symbol == NULL) {
-        symbol = strdup("7.0.2\\ (11A501)");
     }
 
     if (!detect_only) {
